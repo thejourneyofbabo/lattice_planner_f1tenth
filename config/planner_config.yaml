@@ -1,0 +1,32 @@
+# Lattice Planner Configuration
+
+lattice_planner:
+  ros__parameters:
+    # Reference path
+    reference_path_file: "/home/jsyun/Programming/ailab_int/planning_ws/src/lattice_planner_pkg/config/Spielberg_global.csv"  # Spielberg raceline
+    path_resolution: 0.1
+    
+    # Planning parameters
+    lateral_step: 0.5           # Lateral sampling step (m)
+    max_lateral_offset: 2.0     # Maximum lateral offset (m)
+    planning_horizon: 5.0       # Planning time horizon (s)
+    dt: 0.2                     # Time step (s)
+    planning_frequency: 10.0    # Planning frequency (Hz)
+    
+    # Vehicle parameters
+    max_velocity: 10.0          # Maximum velocity (m/s)
+    min_velocity: 2.0           # Minimum planning velocity (m/s)
+    wheelbase: 0.33             # Vehicle wheelbase (m)
+    max_acceleration: 2.0       # Maximum acceleration (m/s²)
+    max_curvature: 1.0          # Maximum path curvature (1/m)
+    
+    # Cost weights
+    lateral_cost_weight: 1.0
+    longitudinal_cost_weight: 1.0
+    obstacle_cost_weight: 10.0
+    curvature_cost_weight: 1.0
+    
+    # Safety parameters
+    safety_margin: 0.3          # Safety margin around obstacles (m)
+    collision_radius: 0.5       # Vehicle collision radius (m)
+    obstacle_detection_range: 8.0  # Obstacle detection range (m)
