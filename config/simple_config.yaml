@@ -1,0 +1,17 @@
+simple_lattice_controller:
+  ros__parameters:
+    # Reference path
+    reference_path_file: "/home/jsyun/Programming/ailab_int/planning_ws/src/lattice_planner_pkg/config/Spielberg_global.csv"
+    
+    # Lattice planning
+    max_lateral_offset: 2.0    # Maximum lateral offset from reference line (m)
+    lateral_samples: 7         # Number of lateral samples (odd number recommended)
+    
+    # Pure pursuit control
+    lookahead_distance: 2.0    # Base lookahead distance (m)
+    wheelbase: 0.33           # Vehicle wheelbase (m)
+    
+    # Speed control
+    target_speed: 3.0         # Target speed (m/s)
+    max_speed: 5.0            # Maximum speed (m/s)
+    min_speed: 1.0            # Minimum speed (m/s)

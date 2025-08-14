@@ -11,6 +11,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(ackermann_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(tf2 REQUIRED)
@@ -59,9 +60,27 @@ target_include_directories(lattice_planner_node
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+# Simple Lattice Planner (all-in-one)
+add_executable(simple_lattice_planner 
+  src/simple_lattice_planner.cpp
+)
+
+ament_target_dependencies(simple_lattice_planner
+  rclcpp 
+  nav_msgs 
+  geometry_msgs 
+  std_msgs
+  sensor_msgs
+  ackermann_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+)
+
 # Install targets
 install(TARGETS 
         lattice_planner_node
+        simple_lattice_planner
         DESTINATION lib/${PROJECT_NAME})
 
 # Install header files
