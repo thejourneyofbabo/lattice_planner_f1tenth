@@ -1,6 +1,6 @@
 #pragma once
 
-#include "types.hpp"
+#include "lattice_planner_pkg/core/types.hpp"
 #include <vector>
 #include <memory>
 

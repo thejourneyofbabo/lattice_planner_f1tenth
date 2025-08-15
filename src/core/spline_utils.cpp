@@ -1,4 +1,4 @@
-#include "lattice_planner_pkg/spline_utils.hpp"
+#include "lattice_planner_pkg/core/spline_utils.hpp"
 #include <fstream>
 #include <sstream>
 #include <iostream>

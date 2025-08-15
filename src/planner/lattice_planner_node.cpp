@@ -1,4 +1,4 @@
-#include "lattice_planner_pkg/lattice_planner.hpp"
+#include "lattice_planner_pkg/planner/lattice_planner.hpp"
 
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);

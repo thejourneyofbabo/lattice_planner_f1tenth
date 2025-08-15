@@ -1,6 +1,6 @@
 #pragma once
 
-#include "types.hpp"
+#include "lattice_planner_pkg/core/types.hpp"
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <vector>

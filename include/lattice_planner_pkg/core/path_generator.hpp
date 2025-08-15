@@ -1,7 +1,7 @@
 #pragma once
 
-#include "types.hpp"
-#include "frenet_coordinate.hpp"
+#include "lattice_planner_pkg/core/types.hpp"
+#include "lattice_planner_pkg/core/frenet_coordinate.hpp"
 #include <vector>
 #include <memory>
 

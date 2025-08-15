@@ -1,10 +1,10 @@
 #pragma once
 
-#include "types.hpp"
-#include "frenet_coordinate.hpp"
-#include "path_generator.hpp"
-#include "obstacle_detector.hpp"
-#include "spline_utils.hpp"
+#include "lattice_planner_pkg/core/types.hpp"
+#include "lattice_planner_pkg/core/frenet_coordinate.hpp"
+#include "lattice_planner_pkg/core/path_generator.hpp"
+#include "lattice_planner_pkg/core/obstacle_detector.hpp"
+#include "lattice_planner_pkg/core/spline_utils.hpp"
 
 #include <rclcpp/rclcpp.hpp>
 #include <nav_msgs/msg/odometry.hpp>

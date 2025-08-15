@@ -1,4 +1,4 @@
-#include "lattice_planner_pkg/obstacle_detector.hpp"
+#include "lattice_planner_pkg/core/obstacle_detector.hpp"
 #include <cmath>
 #include <algorithm>
 

@@ -1,4 +1,4 @@
-#include "lattice_planner_pkg/path_generator.hpp"
+#include "lattice_planner_pkg/core/path_generator.hpp"
 #include <cmath>
 #include <algorithm>
 

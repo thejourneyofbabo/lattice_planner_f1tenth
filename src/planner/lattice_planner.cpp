@@ -1,4 +1,4 @@
-#include "lattice_planner_pkg/lattice_planner.hpp"
+#include "lattice_planner_pkg/planner/lattice_planner.hpp"
 #include "lattice_planner_pkg/msg/path_point_array.hpp"
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
@@ -115,8 +115,19 @@ bool LatticePlanner::load_reference_path() {
         SplineUtils::calculate_heading(reference_path_);
         SplineUtils::calculate_curvature(reference_path_);
     } else {
+        // Resolve reference path file - similar to f1tenth_gym_ros approach
+        std::string resolved_path;
+        if (config_.reference_path_file.find('/') != std::string::npos) {
+            // If full path is provided, use it directly
+            resolved_path = config_.reference_path_file;
+        } else {
+            // Use package share directory for proper path resolution
+            std::string pkg_share_dir = ament_index_cpp::get_package_share_directory("lattice_planner_pkg");
+            resolved_path = pkg_share_dir + "/config/reference_paths/" + config_.reference_path_file + ".csv";
+        }
+        
         reference_path_ = SplineUtils::load_reference_path_from_csv(
-            config_.reference_path_file, config_.path_resolution);
+            resolved_path, config_.path_resolution);
     }
     
     if (reference_path_.empty()) {
@@ -124,7 +135,7 @@ bool LatticePlanner::load_reference_path() {
         return false;
     }
     
-    RCLCPP_INFO(this->get_logger(), "Loaded reference path with %zu points", reference_path_.size());
+    RCLCPP_INFO(this->get_logger(), "Reference path loaded successfully");
     return true;
 }
 
@@ -188,9 +199,7 @@ void LatticePlanner::grid_callback(const nav_msgs::msg::OccupancyGrid::SharedPtr
 
 void LatticePlanner::planning_timer_callback() {
     if (!odom_received_) {
-        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 
-                             1000, "Waiting for odometry data");
-        return;
+        return; // Skip planning until odometry is available
     }
     
     plan_paths();

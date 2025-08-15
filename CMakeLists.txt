@@ -25,14 +25,14 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   DEPENDENCIES builtin_interfaces std_msgs nav_msgs
 )
 
-# Lattice Planner Node
+# Lattice Planner Node (reorganized structure)
 add_executable(lattice_planner_node 
-  src/lattice_planner_node.cpp
-  src/lattice_planner.cpp
-  src/frenet_coordinate.cpp
-  src/path_generator.cpp
-  src/obstacle_detector.cpp
-  src/spline_utils.cpp
+  src/planner/lattice_planner_node.cpp
+  src/planner/lattice_planner.cpp
+  src/core/frenet_coordinate.cpp
+  src/core/path_generator.cpp
+  src/core/obstacle_detector.cpp
+  src/core/spline_utils.cpp
 )
 
 ament_target_dependencies(lattice_planner_node
@@ -54,34 +54,15 @@ target_link_libraries(lattice_planner_node ${cpp_typesupport_target})
 # Add dependencies to ensure messages are built before the executable
 add_dependencies(lattice_planner_node ${PROJECT_NAME})
 
-# Include directories
+# Include directories for organized structure
 target_include_directories(lattice_planner_node
   PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-# Simple Lattice Planner (all-in-one)
-add_executable(simple_lattice_planner 
-  src/simple_lattice_planner.cpp
-)
-
-ament_target_dependencies(simple_lattice_planner
-  rclcpp 
-  nav_msgs 
-  geometry_msgs 
-  std_msgs
-  visualization_msgs
-  sensor_msgs
-  ackermann_msgs
-  tf2
-  tf2_ros
-  tf2_geometry_msgs
-)
-
 # Install targets
 install(TARGETS 
         lattice_planner_node
-        simple_lattice_planner
         DESTINATION lib/${PROJECT_NAME})
 
 # Install header files

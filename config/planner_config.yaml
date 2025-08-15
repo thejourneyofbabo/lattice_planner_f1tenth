@@ -2,8 +2,8 @@
 
 lattice_planner:
   ros__parameters:
-    # Reference path
-    reference_path_file: "/home/jsyun/Programming/ailab_int/planning_ws/src/lattice_planner_pkg/config/Spielberg_global.csv"  # Spielberg raceline
+    # Reference path (relative to package)
+    reference_path_file: "Spielberg_global"  # Will be resolved to package/config/reference_paths/
     path_resolution: 0.1
     
     # Planning parameters
@@ -15,16 +15,11 @@ lattice_planner:
     
     # Vehicle parameters
     max_velocity: 10.0          # Maximum velocity (m/s)
-    min_velocity: 2.0           # Minimum planning velocity (m/s)
     wheelbase: 0.33             # Vehicle wheelbase (m)
-    max_acceleration: 2.0       # Maximum acceleration (m/s²)
     max_curvature: 1.0          # Maximum path curvature (1/m)
     
-    # Cost weights
-    lateral_cost_weight: 1.0
-    longitudinal_cost_weight: 1.0
+    # Cost weights (for future implementation)
     obstacle_cost_weight: 10.0
-    curvature_cost_weight: 1.0
     
     # Safety parameters
     safety_margin: 0.3          # Safety margin around obstacles (m)

@@ -1,4 +1,4 @@
-#include "lattice_planner_pkg/frenet_coordinate.hpp"
+#include "lattice_planner_pkg/core/frenet_coordinate.hpp"
 #include <cmath>
 #include <algorithm>
 
