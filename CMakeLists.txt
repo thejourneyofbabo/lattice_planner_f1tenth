@@ -12,18 +12,12 @@ find_package(std_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(ackermann_msgs REQUIRED)
-find_package(rosidl_default_generators REQUIRED)
-find_package(builtin_interfaces REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
+find_package(planning_custom_msgs REQUIRED)
 
-# Generate custom messages
-rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/PathPoint.msg"
-  "msg/PathPointArray.msg"
-  DEPENDENCIES builtin_interfaces std_msgs nav_msgs
-)
+# Note: Messages moved to planning_custom_msgs package
 
 # Lattice Planner Node (reorganized structure)
 add_executable(lattice_planner_node 
@@ -47,14 +41,12 @@ ament_target_dependencies(lattice_planner_node
   tf2
   tf2_ros
   tf2_geometry_msgs
+  planning_custom_msgs
 )
 
-# Link custom messages
-rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
-target_link_libraries(lattice_planner_node ${cpp_typesupport_target})
+# Note: Using planning_custom_msgs for message types
 
-# Add dependencies to ensure messages are built before the executable
-add_dependencies(lattice_planner_node ${PROJECT_NAME})
+# Messages will be automatically linked through ament_target_dependencies
 
 # Include directories for organized structure
 target_include_directories(lattice_planner_node

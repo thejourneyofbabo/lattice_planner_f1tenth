@@ -14,6 +14,7 @@
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
+#include <planning_custom_msgs/msg/path_with_velocity.hpp>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
 
@@ -32,6 +33,7 @@ public:
 private:
     // ROS2 Publishers and Subscribers
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
+    rclcpp::Publisher<planning_custom_msgs::msg::PathWithVelocity>::SharedPtr path_with_velocity_pub_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr ref_path_pub_;
     
@@ -91,6 +93,7 @@ private:
     
     // Utility functions
     nav_msgs::msg::Path convert_to_nav_path(const PathCandidate& path);
+    planning_custom_msgs::msg::PathWithVelocity convert_to_path_with_velocity(const PathCandidate& path);
     visualization_msgs::msg::MarkerArray create_path_markers(
         const std::vector<PathCandidate>& candidates,
         const PathCandidate& selected

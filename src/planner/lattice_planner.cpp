@@ -1,5 +1,6 @@
 #include "lattice_planner_pkg/planner/lattice_planner.hpp"
-#include "lattice_planner_pkg/msg/path_point_array.hpp"
+#include "planning_custom_msgs/msg/path_point_array.hpp"
+#include "planning_custom_msgs/msg/path_with_velocity.hpp"
 #include "lattice_planner_pkg/obstacle_detector.hpp"
 #include "lattice_planner_pkg/path_selector.hpp"
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -43,6 +44,7 @@ bool LatticePlanner::initialize() {
     this->declare_parameter("curvature_cost_weight", 1.0);
     this->declare_parameter("longitudinal_cost_weight", 0.1);
     this->declare_parameter("obstacle_cost_weight", 10.0);
+    this->declare_parameter("occupancy_grid_topic", std::string("/dynamic_map"));
     
     config_.reference_path_file = this->get_parameter("reference_path_file").as_string();
     config_.path_resolution = this->get_parameter("path_resolution").as_double();
@@ -58,6 +60,7 @@ bool LatticePlanner::initialize() {
     config_.obstacle_cost_weight = this->get_parameter("obstacle_cost_weight").as_double();
     
     double planning_frequency = this->get_parameter("planning_frequency").as_double();
+    std::string occupancy_grid_topic = this->get_parameter("occupancy_grid_topic").as_string();
     
     // Load reference path
     if (!load_reference_path()) {
@@ -93,6 +96,8 @@ bool LatticePlanner::initialize() {
     // Initialize publishers
     path_pub_ = this->create_publisher<nav_msgs::msg::Path>(
         "/planned_path", 10);
+    path_with_velocity_pub_ = this->create_publisher<planning_custom_msgs::msg::PathWithVelocity>(
+        "/planned_path_with_velocity", 10);
     marker_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
         "/path_candidates", 10);
     ref_path_pub_ = this->create_publisher<nav_msgs::msg::Path>(
@@ -108,8 +113,10 @@ bool LatticePlanner::initialize() {
         std::bind(&LatticePlanner::laser_callback, this, std::placeholders::_1));
     
     grid_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
-        "/map", 10,
+        occupancy_grid_topic, 10,
         std::bind(&LatticePlanner::grid_callback, this, std::placeholders::_1));
+    
+    RCLCPP_INFO(this->get_logger(), "Subscribing to occupancy grid topic: %s", occupancy_grid_topic.c_str());
     
     // Initialize planning timer
     auto timer_period = std::chrono::milliseconds(static_cast<int>(1000.0 / planning_frequency));
@@ -223,6 +230,16 @@ void LatticePlanner::grid_callback(const nav_msgs::msg::OccupancyGrid::SharedPtr
         vehicle_pos = vehicle_position_;
     }
     
+    // Count occupied cells for debugging
+    int occupied_cells = 0;
+    for (const auto& cell : msg->data) {
+        if (cell > 50) occupied_cells++; // threshold for occupied
+    }
+    
+    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+        "[OCCUPANCY GRID] Updated: %dx%d grid, %d occupied cells, resolution=%.3fm", 
+        msg->info.width, msg->info.height, occupied_cells, msg->info.resolution);
+    
     // Update advanced obstacle detector with occupancy grid
     advanced_obstacle_detector_->updateOccupancyGrid(msg);
     
@@ -328,51 +345,60 @@ PathCandidate LatticePlanner::select_best_path(const std::vector<PathCandidate>&
             result.cost += obstacle_cost;
             result.collided = result.collided || path_collides;
             
-            RCLCPP_INFO(this->get_logger(), "[DEBUG] Candidate %zu: original_cost=%.3f, obstacle_cost=%.3f, total_cost=%.3f, safe=%s, collides=%s, lateral_offset=%.3f", 
-                       i, original_cost, obstacle_cost, result.cost, 
-                       candidate.is_safe ? "true" : "false",
-                       path_collides ? "true" : "false",
-                       candidate.lateral_offset);
+            // Enhanced logging for collision detection
+            RCLCPP_INFO(this->get_logger(), "[COLLISION CHECK] Candidate %zu: lateral_offset=%.3f, occupancy_cost=%.3f, path_collides=%s, total_collided=%s", 
+                       i, candidate.lateral_offset, obstacle_cost, 
+                       path_collides ? "YES" : "NO",
+                       result.collided ? "YES" : "NO");
         }
         
         advanced_candidates.push_back(result);
     }
     
-    // ENHANCED RACELINE PREFERENCE: Force raceline selection with relaxed collision check
+    // SAFE RACELINE PREFERENCE: Only select raceline if it's collision-free
     size_t raceline_candidate = std::numeric_limits<size_t>::max();
     bool found_safe_raceline = false;
     
     for (size_t i = 0; i < candidates.size(); ++i) {
         if (std::abs(candidates[i].lateral_offset) < 0.05) { // raceline candidate
+            RCLCPP_INFO(this->get_logger(), "[RACELINE DEBUG] Checking raceline candidate %zu:", i);
+            RCLCPP_INFO(this->get_logger(), "  - is_safe: %s", candidates[i].is_safe ? "true" : "false");
+            RCLCPP_INFO(this->get_logger(), "  - advanced_collided: %s", advanced_candidates[i].collided ? "true" : "false");
+            RCLCPP_INFO(this->get_logger(), "  - lateral_offset: %.6f", candidates[i].lateral_offset);
+            
             // Additional check: ensure raceline path has reasonable curvature for corners
             double max_curvature = 0.0;
             for (const auto& point : candidates[i].points) {
                 max_curvature = std::max(max_curvature, std::abs(point.curvature));
             }
+            RCLCPP_INFO(this->get_logger(), "  - max_curvature: %.3f", max_curvature);
             
-            // First priority: Safe raceline with reasonable curvature
-            if (!advanced_candidates[i].collided && max_curvature < 0.8) {
+            // ONLY select raceline if it's collision-free (check BOTH old and new collision detection)
+            bool is_collision_free = candidates[i].is_safe && !advanced_candidates[i].collided;
+            bool curvature_ok = max_curvature < 0.8;
+            
+            RCLCPP_INFO(this->get_logger(), "  - is_collision_free: %s", is_collision_free ? "true" : "false");
+            RCLCPP_INFO(this->get_logger(), "  - curvature_ok: %s", curvature_ok ? "true" : "false");
+            
+            if (is_collision_free && curvature_ok) {
                 raceline_candidate = i;
                 found_safe_raceline = true;
-                RCLCPP_INFO(this->get_logger(), "[RACELINE FORCE] Safe raceline found: candidate %zu", raceline_candidate);
+                RCLCPP_INFO(this->get_logger(), "[SAFE RACELINE] Safe raceline found: candidate %zu", raceline_candidate);
                 break;
-            }
-            // Second priority: Raceline with collision but reasonable curvature (for tight corners)
-            else if (!found_safe_raceline && max_curvature < 1.2) {
-                raceline_candidate = i;
-                RCLCPP_WARN(this->get_logger(), "[RACELINE FORCE] Collision raceline selected: candidate %zu (curvature=%.3f)", i, max_curvature);
+            } else {
+                RCLCPP_WARN(this->get_logger(), "[COLLISION DETECTED] Raceline candidate %zu has collision (is_safe=%s, advanced_collided=%s), skipping", 
+                           i, candidates[i].is_safe ? "true" : "false", 
+                           advanced_candidates[i].collided ? "true" : "false");
             }
         }
     }
     
-    // Force raceline selection even with collision in extreme cases
-    if (raceline_candidate != std::numeric_limits<size_t>::max()) {
-        if (found_safe_raceline) {
-            RCLCPP_INFO(this->get_logger(), "[RACELINE FORCE] Using safe raceline: candidate %zu", raceline_candidate);
-        } else {
-            RCLCPP_WARN(this->get_logger(), "[RACELINE FORCE] Using collision raceline to prevent cutting: candidate %zu", raceline_candidate);
-        }
+    // Only use raceline if it's safe
+    if (found_safe_raceline && raceline_candidate != std::numeric_limits<size_t>::max()) {
+        RCLCPP_INFO(this->get_logger(), "[SAFE RACELINE] Using safe raceline: candidate %zu", raceline_candidate);
         return candidates[raceline_candidate];
+    } else {
+        RCLCPP_WARN(this->get_logger(), "[NO SAFE RACELINE] No collision-free raceline available, using path selector");
     }
     
     // Use advanced path selector
@@ -382,45 +408,66 @@ PathCandidate LatticePlanner::select_best_path(const std::vector<PathCandidate>&
     RCLCPP_INFO(this->get_logger(), "[DEBUG] has_obstacles=%s, vehicle_pos=(%.2f, %.2f)", 
                has_obstacles ? "true" : "false", vehicle_pos.x, vehicle_pos.y);
     
+    // SAFETY OVERRIDE: If obstacles detected, force has_obstacles=false to prevent raceline recovery
+    bool safe_has_obstacles = false; // Disable raceline recovery by forcing no obstacles
+    RCLCPP_WARN(this->get_logger(), "[SAFETY OVERRIDE] Disabling raceline recovery to prioritize safety");
+    
     auto* selected = path_selector_->selectOptimalPath(
-        advanced_candidates, has_obstacles, current_s, this->get_clock());
+        advanced_candidates, safe_has_obstacles, current_s, this->get_clock());
     
     if (selected) {
-        path_selector_->updateCommitState(selected, current_s, this->get_clock());
-        
-        // Find corresponding original candidate
-        for (size_t i = 0; i < candidates.size(); ++i) {
-            if (&advanced_candidates[i] == selected) {
-                RCLCPP_INFO(this->get_logger(), "[DEBUG] Selected advanced candidate %zu with cost=%.3f, collided=%s", 
-                           i, selected->cost, selected->collided ? "true" : "false");
-                return candidates[i];
+        // SAFETY CHECK: Reject selected path if it's raceline with collision
+        bool is_selected_raceline = std::abs(selected->d_offset) < 0.05;
+        if (is_selected_raceline && selected->collided) {
+            RCLCPP_ERROR(this->get_logger(), "[SAFETY OVERRIDE] Path selector chose collision raceline, rejecting and using fallback");
+            selected = nullptr; // Force fallback selection
+        } else {
+            path_selector_->updateCommitState(selected, current_s, this->get_clock());
+            
+            // Find corresponding original candidate
+            for (size_t i = 0; i < candidates.size(); ++i) {
+                if (&advanced_candidates[i] == selected) {
+                    RCLCPP_INFO(this->get_logger(), "[DEBUG] Selected advanced candidate %zu with cost=%.3f, collided=%s", 
+                               i, selected->cost, selected->collided ? "true" : "false");
+                    return candidates[i];
+                }
             }
         }
     } else {
         RCLCPP_WARN(this->get_logger(), "[DEBUG] Advanced path selector returned null, falling back to simple selection");
     }
     
-    // Fallback to simple cost-based selection
+    // Fallback to collision-aware cost-based selection
     double min_cost = std::numeric_limits<double>::max();
     size_t best_idx = 0;
     
+    // First priority: Find collision-free paths only
     for (size_t i = 0; i < candidates.size(); ++i) {
-        if (candidates[i].is_safe && candidates[i].cost < min_cost) {
+        bool is_collision_free = candidates[i].is_safe && !advanced_candidates[i].collided;
+        if (is_collision_free && candidates[i].cost < min_cost) {
             min_cost = candidates[i].cost;
             best_idx = i;
         }
     }
     
-    // If no safe path found, select least dangerous one
+    // If no collision-free path found, emergency selection (prefer safest path)
     if (min_cost == std::numeric_limits<double>::max()) {
-        RCLCPP_WARN(this->get_logger(), "No safe path found, selecting least dangerous");
+        RCLCPP_ERROR(this->get_logger(), "[EMERGENCY] No collision-free path found! Selecting safest available path");
         min_cost = std::numeric_limits<double>::max();
         for (size_t i = 0; i < candidates.size(); ++i) {
-            if (candidates[i].cost < min_cost) {
-                min_cost = candidates[i].cost;
+            // Choose path with least collision risk (prioritize is_safe over occupancy collision)
+            double emergency_cost = candidates[i].cost;
+            if (advanced_candidates[i].collided) emergency_cost += 10000.0; // Heavy penalty for occupancy collision
+            if (!candidates[i].is_safe) emergency_cost += 5000.0; // Penalty for other collision
+            
+            if (emergency_cost < min_cost) {
+                min_cost = emergency_cost;
                 best_idx = i;
             }
         }
+        RCLCPP_ERROR(this->get_logger(), "[EMERGENCY] Selected path %zu with collision risk", best_idx);
+    } else {
+        RCLCPP_INFO(this->get_logger(), "[FALLBACK] Selected collision-free path %zu", best_idx);
     }
     
     return candidates[best_idx];
@@ -429,9 +476,13 @@ PathCandidate LatticePlanner::select_best_path(const std::vector<PathCandidate>&
 void LatticePlanner::publish_selected_path(const PathCandidate& path) {
     if (path.points.empty()) return;
     
-    // Publish path as nav_msgs::Path
+    // Publish path as nav_msgs::Path (for backward compatibility)
     auto nav_path = convert_to_nav_path(path);
     path_pub_->publish(nav_path);
+    
+    // Publish path as PathWithVelocity (for velocity-aware path following)
+    auto velocity_path = convert_to_path_with_velocity(path);
+    path_with_velocity_pub_->publish(velocity_path);
 }
 
 void LatticePlanner::publish_path_visualization(
@@ -490,6 +541,35 @@ nav_msgs::msg::Path LatticePlanner::convert_to_nav_path(const PathCandidate& pat
     }
     
     return nav_path;
+}
+
+planning_custom_msgs::msg::PathWithVelocity LatticePlanner::convert_to_path_with_velocity(const PathCandidate& path) {
+    planning_custom_msgs::msg::PathWithVelocity velocity_path;
+    velocity_path.header.frame_id = "map";
+    velocity_path.header.stamp = this->get_clock()->now();
+    
+    // Set path ID for tracking (could be based on path cost or lateral offset)
+    velocity_path.path_id = static_cast<uint32_t>(std::hash<double>{}(path.lateral_offset) % 10000);
+    
+    // Calculate maximum velocity in path
+    double max_vel = 0.0;
+    for (const auto& point : path.points) {
+        max_vel = std::max(max_vel, point.velocity);
+        
+        planning_custom_msgs::msg::PathPoint path_point;
+        path_point.x = point.x;
+        path_point.y = point.y;
+        path_point.yaw = point.yaw;
+        path_point.velocity = point.velocity;
+        path_point.curvature = point.curvature;
+        path_point.time_from_start = point.time;
+        
+        velocity_path.points.push_back(path_point);
+    }
+    
+    velocity_path.max_velocity = max_vel;
+    
+    return velocity_path;
 }
 
 visualization_msgs::msg::MarkerArray LatticePlanner::create_path_markers(

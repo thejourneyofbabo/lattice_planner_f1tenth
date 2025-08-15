@@ -271,7 +271,7 @@ std::vector<double> PathGenerator::generate_lateral_samples(double current_d) co
         
         // In high curvature (corners), limit lateral range to stay within track
         if (current_curvature > 0.3) {  // Corner detected
-            effective_max_offset = std::min(config_.max_lateral_offset, 1.0);  // Limit to ±1.0m
+            effective_max_offset = std::min(config_.max_lateral_offset, 1.2);  // Limit to ±1.2m - less restrictive
             RCLCPP_INFO_ONCE(rclcpp::get_logger("path_generator"), 
                 "[CORNER LATTICE] Limiting lateral range to ±%.1fm for high curvature %.3f", 
                 effective_max_offset, current_curvature);
@@ -349,13 +349,13 @@ double PathGenerator::calculate_path_cost(
     
     double cost = 0.0;
     
-    // EXTREME RACELINE PREFERENCE: Give massive bonus to raceline paths
+    // Strong raceline preference but not extreme
     if (std::abs(path.lateral_offset) < 0.05) {
-        // Almost raceline - give huge bonus
+        // Almost raceline - give good bonus
         cost = 0.0; // Start with zero cost for raceline
     } else {
-        // Lateral deviation cost - use exponential penalty for non-raceline paths
-        double lateral_cost = std::pow(path.lateral_offset, 4) * config_.lateral_cost_weight;
+        // Lateral deviation cost - moderate exponential penalty
+        double lateral_cost = std::pow(path.lateral_offset, 2) * config_.lateral_cost_weight * 5.0;
         cost += lateral_cost;
     }
     
