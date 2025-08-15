@@ -66,7 +66,7 @@ private:
     std::vector<double> generate_lateral_samples(double current_d) const;
     
     // Generate velocity samples
-    std::vector<double> generate_velocity_samples(double current_velocity) const;
+    std::vector<double> generate_velocity_samples(double current_velocity, double current_s) const;
 };
 
 } // namespace lattice_planner_pkg

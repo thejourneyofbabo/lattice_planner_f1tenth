@@ -483,6 +483,19 @@ void LatticePlanner::publish_selected_path(const PathCandidate& path) {
     // Publish path as PathWithVelocity (for velocity-aware path following)
     auto velocity_path = convert_to_path_with_velocity(path);
     path_with_velocity_pub_->publish(velocity_path);
+    
+    // Log velocity path information for debugging
+    if (!velocity_path.points.empty()) {
+        double avg_velocity = 0.0;
+        for (const auto& point : velocity_path.points) {
+            avg_velocity += point.velocity;
+        }
+        avg_velocity /= velocity_path.points.size();
+        
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+            "[VELOCITY PUBLISH] PathWithVelocity published: %zu points, avg_vel=%.2f, max_vel=%.2f", 
+            velocity_path.points.size(), avg_velocity, velocity_path.max_velocity);
+    }
 }
 
 void LatticePlanner::publish_path_visualization(

@@ -80,8 +80,8 @@ std::vector<PathCandidate> PathGenerator::generate_paths(
     // Generate lateral offset samples centered around vehicle's current position
     std::vector<double> lateral_samples = generate_lateral_samples(start_frenet.d);
     
-    // Generate velocity samples  
-    std::vector<double> velocity_samples = generate_velocity_samples(vehicle_velocity);
+    // Generate velocity samples with current position info
+    std::vector<double> velocity_samples = generate_velocity_samples(vehicle_velocity, start_frenet.s);
     
     // Generate paths for each combination
     for (double lateral_offset : lateral_samples) {
@@ -211,7 +211,6 @@ PathCandidate PathGenerator::generate_single_path(
         // Convert to Cartesian
         CartesianPoint cartesian_point = frenet_coord_->frenet_to_cartesian(frenet_point);
         cartesian_point.time = t;
-        cartesian_point.velocity = s_dot;  // Use longitudinal velocity
         
         // Calculate curvature more accurately
         if (i > 0) {
@@ -234,6 +233,17 @@ PathCandidate PathGenerator::generate_single_path(
                 }
             }
         }
+        
+        // IMPROVED VELOCITY PLANNING: Adjust velocity based on curvature
+        double curvature_based_velocity = s_dot;
+        if (cartesian_point.curvature > 0.1) {  // Curved section
+            // Reduce velocity based on curvature (v = sqrt(a_lateral_max / curvature))
+            double max_lateral_accel = 4.0;  // m/s^2, reasonable for F1TENTH
+            double safe_velocity = std::sqrt(max_lateral_accel / cartesian_point.curvature);
+            curvature_based_velocity = std::min(s_dot, safe_velocity);
+        }
+        
+        cartesian_point.velocity = curvature_based_velocity;  // Use curvature-adjusted velocity
         
         candidate.points.push_back(cartesian_point);
     }
@@ -298,42 +308,67 @@ std::vector<double> PathGenerator::generate_lateral_samples(double current_d) co
     return samples;
 }
 
-std::vector<double> PathGenerator::generate_velocity_samples(double current_velocity) const {
+std::vector<double> PathGenerator::generate_velocity_samples(double current_velocity, double current_s) const {
     std::vector<double> samples;
     
-    // Ensure minimum velocity for planning
-    double min_planning_vel = 2.0;  // Minimum 2 m/s for reasonable path length
+    // IMPROVED VELOCITY SAMPLING: More aggressive and wider range
+    double min_planning_vel = std::max(2.5, current_velocity * 0.8);  // Higher base minimum
     double effective_velocity = std::max(min_planning_vel, current_velocity);
     
-    // Generate velocity samples around effective velocity
-    double min_vel = std::max(min_planning_vel, effective_velocity - 1.0);
-    double max_vel = std::min(config_.max_velocity, effective_velocity + 3.0);
+    // Much wider velocity range for better optimization
+    double min_vel = std::max(2.5, effective_velocity - 2.0);  // Lower bound
+    double max_vel = std::min(config_.max_velocity, effective_velocity + 4.0);  // Upper bound
     
-    // CORNER OPTIMIZATION: Reduce velocity samples in corners
-    int num_samples = 3;  // Default samples
+    // Default to more samples for better velocity optimization
+    int num_samples = 7;  // More samples for better planning
     
-    // Check current curvature to detect corners
-    double current_s = 0.0; // This will be set from vehicle position
-    if (frenet_coord_) {
+    // POSITION-AWARE CURVATURE CHECK: Use actual vehicle position
+    if (frenet_coord_ && current_s > 0.0) {
         RefPoint ref_point = frenet_coord_->get_reference_point(current_s);
         double current_curvature = std::abs(ref_point.curvature);
         
-        // In high curvature (corners), reduce velocity samples for performance
-        if (current_curvature > 0.3) {  // Corner detected
-            num_samples = 2;  // Reduce to 2 samples in corners
-            RCLCPP_INFO_ONCE(rclcpp::get_logger("path_generator"), 
-                "[CORNER LATTICE] Reducing velocity samples to %d for high curvature %.3f", 
-                num_samples, current_curvature);
+        // Adjust velocity range based on current track curvature
+        if (current_curvature > 0.3) {  // High curvature corner
+            max_vel = std::min(max_vel, 5.0);  // Conservative in tight corners
+            num_samples = 5;  // Fewer samples in corners
+            static rclcpp::Clock clock;
+            RCLCPP_INFO_THROTTLE(rclcpp::get_logger("path_generator"), clock, 1000,
+                "[CORNER DETECTED] s=%.1f, curvature=%.3f, limiting max_vel to %.1f", 
+                current_s, current_curvature, max_vel);
+        } else if (current_curvature > 0.15) {  // Medium curvature
+            max_vel = std::min(max_vel, 6.5);  // Moderate limitation
         }
+        // Straight sections: use full velocity range
     }
     
+    // Dynamic adjustment: if current velocity is low, explore higher speeds more
+    if (current_velocity < 4.0) {
+        max_vel = std::min(config_.max_velocity, max_vel + 2.0);  // Boost max when slow
+        min_vel = std::max(2.5, current_velocity);  // Start from current velocity
+        static rclcpp::Clock clock2;
+        RCLCPP_INFO_THROTTLE(rclcpp::get_logger("path_generator"), clock2, 2000,
+            "[SPEED BOOST] Low current velocity %.1f, exploring up to %.1f m/s", 
+            current_velocity, max_vel);
+    }
+    
+    // Generate diverse velocity samples
     if (num_samples == 1) {
         samples.push_back((min_vel + max_vel) / 2.0);
     } else {
         double vel_step = (max_vel - min_vel) / (num_samples - 1);
         for (int i = 0; i < num_samples; ++i) {
-            samples.push_back(min_vel + i * vel_step);
+            double sample_vel = min_vel + i * vel_step;
+            samples.push_back(sample_vel);
         }
+    }
+    
+    // Log velocity sampling for debugging
+    static int vel_log_count = 0;
+    if (vel_log_count < 5) {
+        RCLCPP_INFO(rclcpp::get_logger("path_generator"), 
+            "[VELOCITY SAMPLES] current=%.1f, s=%.1f, range=[%.1f, %.1f], samples=%d", 
+            current_velocity, current_s, min_vel, max_vel, num_samples);
+        vel_log_count++;
     }
     
     return samples;
