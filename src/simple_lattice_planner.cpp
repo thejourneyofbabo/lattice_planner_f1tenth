@@ -22,8 +22,9 @@ struct Point2D {
 
 struct PathPoint {
     double x, y, yaw, curvature, velocity;
-    PathPoint(double x=0, double y=0, double yaw=0, double curvature=0, double velocity=0)
-        : x(x), y(y), yaw(yaw), curvature(curvature), velocity(velocity) {}
+    double lateral_offset;  // Store lateral offset for cost calculation
+    PathPoint(double x=0, double y=0, double yaw=0, double curvature=0, double velocity=0, double lateral_offset=0)
+        : x(x), y(y), yaw(yaw), curvature(curvature), velocity(velocity), lateral_offset(lateral_offset) {}
 };
 
 class SimpleLatticeController : public rclcpp::Node {
@@ -110,7 +111,7 @@ private:
                 double x = i * 0.5;
                 double y = 2.0 * std::sin(i * 0.1);
                 double yaw = std::atan2(2.0 * 0.1 * std::cos(i * 0.1), 1.0);
-                reference_path_.emplace_back(x, y, yaw, 0.0, target_speed_);
+                reference_path_.emplace_back(x, y, yaw, 0.0, target_speed_, 0.0);
             }
             return true;
         }
@@ -139,14 +140,32 @@ private:
             if (values.size() >= 2) {
                 double x = values[0];
                 double y = values[1];
-                double yaw = (values.size() >= 3) ? values[2] : 0.0;
-                double vel = (values.size() >= 4) ? values[3] : target_speed_;
-                reference_path_.emplace_back(x, y, yaw, 0.0, vel);
+                double vel = (values.size() >= 5) ? values[4] : target_speed_;  // vx_mps is 5th column
+                reference_path_.emplace_back(x, y, 0.0, 0.0, vel, 0.0);  // yaw will be calculated later
             }
         }
         
+        // Calculate yaw angles for each point
+        calculate_path_yaw();
+        
         RCLCPP_INFO(this->get_logger(), "Loaded %zu reference points", reference_path_.size());
         return !reference_path_.empty();
+    }
+    
+    void calculate_path_yaw() {
+        if (reference_path_.size() < 2) return;
+        
+        // Calculate yaw for each point based on direction to next point
+        for (size_t i = 0; i < reference_path_.size() - 1; ++i) {
+            double dx = reference_path_[i+1].x - reference_path_[i].x;
+            double dy = reference_path_[i+1].y - reference_path_[i].y;
+            reference_path_[i].yaw = std::atan2(dy, dx);
+        }
+        
+        // Last point uses same yaw as second-to-last point
+        if (reference_path_.size() > 1) {
+            reference_path_.back().yaw = reference_path_[reference_path_.size()-2].yaw;
+        }
     }
     
     void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
@@ -223,9 +242,12 @@ private:
     }
     
     int find_closest_point() {
+        if (reference_path_.empty()) return -1;
+        
         double min_dist = std::numeric_limits<double>::max();
         int closest_idx = -1;
         
+        // Simple closest point search (like original)
         for (size_t i = 0; i < reference_path_.size(); ++i) {
             double dx = reference_path_[i].x - vehicle_pos_.x;
             double dy = reference_path_[i].y - vehicle_pos_.y;
@@ -272,7 +294,7 @@ private:
             double offset_x = ref_point.x + lateral_offset * std::cos(ref_point.yaw + M_PI/2);
             double offset_y = ref_point.y + lateral_offset * std::sin(ref_point.yaw + M_PI/2);
             
-            path.emplace_back(offset_x, offset_y, ref_point.yaw, 0.0, target_speed_);
+            path.emplace_back(offset_x, offset_y, ref_point.yaw, 0.0, target_speed_, lateral_offset);
         }
         
         return path;
@@ -301,20 +323,13 @@ private:
         
         double cost = 0.0;
         
-        // Distance from reference line cost (prefer center)
+        // Lateral offset cost (very weak preference for center)
         double lateral_cost = 0.0;
-        for (const auto& point : path) {
-            // Find closest reference point
-            double min_dist = 1e6;
-            for (const auto& ref : reference_path_) {
-                double dx = point.x - ref.x;
-                double dy = point.y - ref.y;
-                double dist = std::sqrt(dx*dx + dy*dy);
-                min_dist = std::min(min_dist, dist);
-            }
-            lateral_cost += min_dist * min_dist;
+        if (!path.empty()) {
+            double avg_lateral_offset = std::abs(path[0].lateral_offset);
+            lateral_cost = avg_lateral_offset * 0.1; // Very weak preference, let Pure Pursuit handle it
         }
-        cost += lateral_cost * 1.0; // Weight
+        cost += lateral_cost;
         
         // Obstacle cost
         double obstacle_cost = 0.0;
@@ -324,12 +339,27 @@ private:
                 double dy = point.y - obs.y;
                 double dist = std::sqrt(dx*dx + dy*dy);
                 
-                if (dist < 0.5) {
-                    obstacle_cost += 100.0 / (dist + 0.1); // High cost for close obstacles
+                if (dist < 1.0) {  // Increased detection range
+                    obstacle_cost += 50.0 / (dist + 0.1); // High cost for close obstacles
                 }
             }
         }
         cost += obstacle_cost;
+        
+        // Smoothness cost (prefer smoother paths)
+        double smoothness_cost = 0.0;
+        for (size_t i = 1; i < path.size(); ++i) {
+            double dx = path[i].x - path[i-1].x;
+            double dy = path[i].y - path[i-1].y;
+            double dyaw = path[i].yaw - path[i-1].yaw;
+            
+            // Normalize angle difference
+            while (dyaw > M_PI) dyaw -= 2.0 * M_PI;
+            while (dyaw < -M_PI) dyaw += 2.0 * M_PI;
+            
+            smoothness_cost += dyaw * dyaw;
+        }
+        cost += smoothness_cost * 0.1;
         
         return cost;
     }

@@ -70,6 +70,7 @@ ament_target_dependencies(simple_lattice_planner
   nav_msgs 
   geometry_msgs 
   std_msgs
+  visualization_msgs
   sensor_msgs
   ackermann_msgs
   tf2
