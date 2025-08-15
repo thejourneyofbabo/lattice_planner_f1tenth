@@ -62,8 +62,8 @@ private:
     // Generate time samples
     std::vector<double> generate_time_samples() const;
     
-    // Generate lateral offset samples
-    std::vector<double> generate_lateral_samples() const;
+    // Generate lateral offset samples relative to current position
+    std::vector<double> generate_lateral_samples(double current_d) const;
     
     // Generate velocity samples
     std::vector<double> generate_velocity_samples(double current_velocity) const;

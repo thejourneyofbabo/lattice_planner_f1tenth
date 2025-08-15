@@ -5,6 +5,8 @@
 #include "lattice_planner_pkg/core/path_generator.hpp"
 #include "lattice_planner_pkg/core/obstacle_detector.hpp"
 #include "lattice_planner_pkg/core/spline_utils.hpp"
+#include "lattice_planner_pkg/obstacle_detector.hpp"
+#include "lattice_planner_pkg/path_selector.hpp"
 
 #include <rclcpp/rclcpp.hpp>
 #include <nav_msgs/msg/odometry.hpp>
@@ -38,12 +40,17 @@ private:
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr grid_sub_;
     
     rclcpp::TimerBase::SharedPtr planning_timer_;
+    rclcpp::TimerBase::SharedPtr ref_path_timer_;
     
     // Core modules
     PlannerConfig config_;
     std::shared_ptr<FrenetCoordinate> frenet_coord_;
     std::shared_ptr<PathGenerator> path_generator_;
     std::shared_ptr<ObstacleDetector> obstacle_detector_;
+    
+    // Advanced planning modules
+    std::unique_ptr<advanced::ObstacleDetector> advanced_obstacle_detector_;
+    std::unique_ptr<advanced::PathSelector> path_selector_;
     
     // Vehicle state
     Point2D vehicle_position_;
@@ -68,6 +75,7 @@ private:
     void laser_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg);
     void grid_callback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg);
     void planning_timer_callback();
+    void ref_path_timer_callback();
     
     // Core functions
     bool initialize();

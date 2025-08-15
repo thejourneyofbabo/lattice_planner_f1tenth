@@ -31,7 +31,36 @@ std::vector<PathCandidate> PathGenerator::generate_paths(
     // Convert vehicle position to Frenet coordinates
     FrenetPoint start_frenet = frenet_coord_->cartesian_to_frenet(vehicle_position);
     
-    // If vehicle is too far from reference path, find closest point and project onto it
+    // Get reference point at current s position to align with vehicle heading
+    RefPoint ref_point = frenet_coord_->get_reference_point(start_frenet.s);
+    double ref_heading = ref_point.heading;
+    
+    // Calculate heading difference between vehicle and reference path
+    double heading_diff = vehicle_yaw - ref_heading;
+    while (heading_diff > M_PI) heading_diff -= 2.0 * M_PI;
+    while (heading_diff < -M_PI) heading_diff += 2.0 * M_PI;
+    
+    // If vehicle heading is significantly different from reference path, 
+    // adjust the starting frenet coordinates to ensure smooth transition
+    if (std::abs(heading_diff) > M_PI/6) {  // More than 30 degrees difference
+        // Project vehicle's forward direction onto frenet frame
+        double forward_s_component = vehicle_velocity * std::cos(heading_diff);
+        double forward_d_component = vehicle_velocity * std::sin(heading_diff);
+        
+        // Initialize starting derivatives based on vehicle's actual motion
+        start_frenet.s_dot = std::max(2.0, std::abs(forward_s_component));  // Ensure forward motion
+        start_frenet.d_dot = forward_d_component * 0.3;  // Smooth lateral transition
+        
+        RCLCPP_INFO_ONCE(rclcpp::get_logger("path_generator"), 
+            "Vehicle heading differs from reference by %.1f degrees, adjusting start derivatives", 
+            heading_diff * 180.0 / M_PI);
+    } else {
+        // Vehicle is well aligned with reference path
+        start_frenet.s_dot = std::max(2.0, vehicle_velocity);  // Ensure minimum forward speed
+        start_frenet.d_dot = 0.0;  // No lateral motion if well aligned
+    }
+    
+    // If vehicle is too far from reference path, gradually guide it back
     int closest_ref_idx = frenet_coord_->find_closest_reference_index(vehicle_position);
     if (closest_ref_idx >= 0) {
         RefPoint closest_ref = frenet_coord_->get_reference_point(start_frenet.s);
@@ -40,18 +69,16 @@ std::vector<PathCandidate> PathGenerator::generate_paths(
             std::pow(vehicle_position.y - closest_ref.y, 2)
         );
         
-        // If too far (>5m), project vehicle onto reference path
-        if (distance_to_ref > 5.0) {
-            start_frenet.s = closest_ref.s;
-            start_frenet.d = 0.0;  // Start from reference line
-            RCLCPP_WARN_ONCE(rclcpp::get_logger("path_generator"), 
-                "Vehicle too far from reference path (%.1fm), projecting to reference line", 
+        // If too far (>3m), bias the path generation towards reference line
+        if (distance_to_ref > 3.0) {
+            RCLCPP_WARN(rclcpp::get_logger("path_generator"), 
+                "Vehicle far from reference path (%.1fm), biasing towards center", 
                 distance_to_ref);
         }
     }
     
-    // Generate lateral offset samples
-    std::vector<double> lateral_samples = generate_lateral_samples();
+    // Generate lateral offset samples centered around vehicle's current position
+    std::vector<double> lateral_samples = generate_lateral_samples(start_frenet.d);
     
     // Generate velocity samples  
     std::vector<double> velocity_samples = generate_velocity_samples(vehicle_velocity);
@@ -63,10 +90,12 @@ std::vector<PathCandidate> PathGenerator::generate_paths(
                 start_frenet, lateral_offset, target_velocity);
                 
             if (!candidate.points.empty()) {
+                // Set lateral offset BEFORE cost calculation
+                candidate.lateral_offset = lateral_offset;
+                
                 // Calculate cost and check collision
                 candidate.cost = calculate_path_cost(candidate, obstacles);
                 candidate.is_safe = !check_collision(candidate, obstacles);
-                candidate.lateral_offset = lateral_offset;
                 
                 candidates.push_back(candidate);
             }
@@ -87,33 +116,104 @@ PathCandidate PathGenerator::generate_single_path(
         return candidate;
     }
     
+    // Debug: Log path generation parameters
+    static int path_count = 0;
+    if (path_count < 10) {  // Only log first 10 paths to avoid spam
+        RCLCPP_INFO(rclcpp::get_logger("path_generator"), 
+            "[PATH %d] start_d=%.3f -> target_d=%.3f, start_s=%.3f, vel=%.3f", 
+            path_count++, start_frenet.d, target_lateral_offset, start_frenet.s, target_velocity);
+    }
+    
     // Generate time samples
     std::vector<double> time_samples = generate_time_samples();
+    
+    // Use quintic polynomial for smooth lateral motion
+    double T = config_.planning_horizon;
+    
+    // Check reference path curvature ahead for adaptive planning
+    RefPoint current_ref = frenet_coord_->get_reference_point(start_frenet.s);
+    RefPoint ahead_ref = frenet_coord_->get_reference_point(start_frenet.s + T * start_frenet.s_dot);
+    double avg_curvature = (std::abs(current_ref.curvature) + std::abs(ahead_ref.curvature)) / 2.0;
+    
+    // Adaptive target adjustment for corners
+    double conservative_factor = 1.0;
+    if (avg_curvature > 0.3) { // High curvature corner
+        conservative_factor = 0.6; // More conservative - stick closer to raceline
+        static rclcpp::Clock clock;
+        RCLCPP_INFO_THROTTLE(rclcpp::get_logger("path_generator"), clock, 1000,
+            "[CORNER MODE] High curvature %.3f detected, applying conservative factor %.1f", 
+            avg_curvature, conservative_factor);
+    } else if (avg_curvature > 0.15) { // Medium curvature
+        conservative_factor = 0.8;
+    }
+    
+    // Apply conservative factor to lateral offset
+    double adjusted_target_lateral_offset = target_lateral_offset * conservative_factor;
+    
+    // Lateral motion parameters
+    double d_start = start_frenet.d;
+    double d_dot_start = start_frenet.d_dot;
+    double d_ddot_start = 0.0;  // Assume zero initial lateral acceleration
+    
+    double d_end = adjusted_target_lateral_offset;
+    double d_dot_end = 0.0;     // Target zero lateral velocity at end
+    double d_ddot_end = 0.0;    // Target zero lateral acceleration at end
+    
+    // Solve quintic polynomial for lateral motion
+    std::vector<double> lateral_coeffs = solve_quintic_polynomial(
+        d_start, d_dot_start, d_ddot_start,
+        d_end, d_dot_end, d_ddot_end, T);
+    
+    // Longitudinal motion parameters
+    double s_start = start_frenet.s;
+    double s_dot_start = start_frenet.s_dot;
+    double s_ddot_start = 0.0;
+    
+    // Simple constant velocity longitudinal motion (can be improved with quartic polynomial)
+    double target_s_dot = target_velocity;
     
     for (size_t i = 0; i < time_samples.size(); ++i) {
         double t = time_samples[i];
         
-        // Simple linear interpolation for lateral motion
-        double d = start_frenet.d + (target_lateral_offset - start_frenet.d) * (t / config_.planning_horizon);
+        // Calculate lateral position using quintic polynomial
+        double d = 0.0;
+        double d_dot = 0.0;
+        double d_ddot = 0.0;
         
-        // Constant velocity longitudinal motion
-        double s = start_frenet.s + target_velocity * t;
+        if (lateral_coeffs.size() >= 6) {
+            d = lateral_coeffs[0] + lateral_coeffs[1]*t + lateral_coeffs[2]*t*t + 
+                lateral_coeffs[3]*t*t*t + lateral_coeffs[4]*t*t*t*t + lateral_coeffs[5]*t*t*t*t*t;
+            d_dot = lateral_coeffs[1] + 2*lateral_coeffs[2]*t + 3*lateral_coeffs[3]*t*t + 
+                    4*lateral_coeffs[4]*t*t*t + 5*lateral_coeffs[5]*t*t*t*t;
+            d_ddot = 2*lateral_coeffs[2] + 6*lateral_coeffs[3]*t + 
+                     12*lateral_coeffs[4]*t*t + 20*lateral_coeffs[5]*t*t*t;
+        } else {
+            // Fallback to linear interpolation if polynomial solving fails
+            d = d_start + (d_end - d_start) * (t / T);
+            d_dot = (d_end - d_start) / T;
+            d_ddot = 0.0;
+        }
+        
+        // Longitudinal motion with smooth acceleration
+        double s = s_start + s_dot_start * t + 0.5 * (target_s_dot - s_dot_start) / T * t * t;
+        double s_dot = s_dot_start + (target_s_dot - s_dot_start) * (t / T);
+        double s_ddot = (target_s_dot - s_dot_start) / T;
         
         // Create Frenet point
         FrenetPoint frenet_point;
         frenet_point.s = s;
         frenet_point.d = d;
-        frenet_point.s_dot = target_velocity;
-        frenet_point.d_dot = 0.0;
-        frenet_point.s_ddot = 0.0;
-        frenet_point.d_ddot = 0.0;
+        frenet_point.s_dot = s_dot;
+        frenet_point.d_dot = d_dot;
+        frenet_point.s_ddot = s_ddot;
+        frenet_point.d_ddot = d_ddot;
         
         // Convert to Cartesian
         CartesianPoint cartesian_point = frenet_coord_->frenet_to_cartesian(frenet_point);
         cartesian_point.time = t;
-        cartesian_point.velocity = target_velocity;
+        cartesian_point.velocity = s_dot;  // Use longitudinal velocity
         
-        // Calculate curvature (simplified)
+        // Calculate curvature more accurately
         if (i > 0) {
             const CartesianPoint& prev = candidate.points[i-1];
             double dx = cartesian_point.x - prev.x;
@@ -127,6 +227,11 @@ PathCandidate PathGenerator::generate_single_path(
                 while (dyaw < -M_PI) dyaw += 2.0 * M_PI;
                 
                 cartesian_point.curvature = std::abs(dyaw / ds);
+                
+                // Limit maximum curvature for vehicle dynamics
+                if (cartesian_point.curvature > config_.max_curvature) {
+                    cartesian_point.curvature = config_.max_curvature;
+                }
             }
         }
         
@@ -148,15 +253,47 @@ std::vector<double> PathGenerator::generate_time_samples() const {
     return samples;
 }
 
-std::vector<double> PathGenerator::generate_lateral_samples() const {
+std::vector<double> PathGenerator::generate_lateral_samples(double current_d) const {
     std::vector<double> samples;
     
-    int num_steps = static_cast<int>(2.0 * config_.max_lateral_offset / config_.lateral_step) + 1;
+    // Calculate the range of lateral offsets centered around current position
+    // The center lattice should target the raceline (d=0), others should be parallel
+    
+    // CORNER OPTIMIZATION: Reduce lattice range to prevent track departure
+    double effective_max_offset = config_.max_lateral_offset;
+    
+    // Check current curvature to detect corners
+    double current_s = 0.0; // This will be set from vehicle position
+    if (frenet_coord_) {
+        // Get current curvature from reference path
+        RefPoint ref_point = frenet_coord_->get_reference_point(current_s);
+        double current_curvature = std::abs(ref_point.curvature);
+        
+        // In high curvature (corners), limit lateral range to stay within track
+        if (current_curvature > 0.3) {  // Corner detected
+            effective_max_offset = std::min(config_.max_lateral_offset, 1.0);  // Limit to ±1.0m
+            RCLCPP_INFO_ONCE(rclcpp::get_logger("path_generator"), 
+                "[CORNER LATTICE] Limiting lateral range to ±%.1fm for high curvature %.3f", 
+                effective_max_offset, current_curvature);
+        }
+    }
+    
+    int num_steps = static_cast<int>(2.0 * effective_max_offset / config_.lateral_step) + 1;
+    
+    // Create lattice paths that transition from current position to target positions
+    // Center lattice targets raceline (d=0), others are offset from raceline
+    double half_range = effective_max_offset;
     
     for (int i = 0; i < num_steps; ++i) {
-        double offset = -config_.max_lateral_offset + i * config_.lateral_step;
-        samples.push_back(offset);
+        // Target lateral positions relative to raceline
+        double target_offset = -half_range + i * config_.lateral_step;
+        samples.push_back(target_offset);
     }
+    
+    // Sort by distance from raceline to prioritize center paths
+    std::sort(samples.begin(), samples.end(), [](double a, double b) {
+        return std::abs(a) < std::abs(b);
+    });
     
     return samples;
 }
@@ -172,7 +309,24 @@ std::vector<double> PathGenerator::generate_velocity_samples(double current_velo
     double min_vel = std::max(min_planning_vel, effective_velocity - 1.0);
     double max_vel = std::min(config_.max_velocity, effective_velocity + 3.0);
     
-    int num_samples = 3;  // Reduce samples for performance
+    // CORNER OPTIMIZATION: Reduce velocity samples in corners
+    int num_samples = 3;  // Default samples
+    
+    // Check current curvature to detect corners
+    double current_s = 0.0; // This will be set from vehicle position
+    if (frenet_coord_) {
+        RefPoint ref_point = frenet_coord_->get_reference_point(current_s);
+        double current_curvature = std::abs(ref_point.curvature);
+        
+        // In high curvature (corners), reduce velocity samples for performance
+        if (current_curvature > 0.3) {  // Corner detected
+            num_samples = 2;  // Reduce to 2 samples in corners
+            RCLCPP_INFO_ONCE(rclcpp::get_logger("path_generator"), 
+                "[CORNER LATTICE] Reducing velocity samples to %d for high curvature %.3f", 
+                num_samples, current_curvature);
+        }
+    }
+    
     if (num_samples == 1) {
         samples.push_back((min_vel + max_vel) / 2.0);
     } else {
@@ -195,9 +349,15 @@ double PathGenerator::calculate_path_cost(
     
     double cost = 0.0;
     
-    // Lateral deviation cost
-    double lateral_cost = std::abs(path.lateral_offset) * config_.lateral_cost_weight;
-    cost += lateral_cost;
+    // EXTREME RACELINE PREFERENCE: Give massive bonus to raceline paths
+    if (std::abs(path.lateral_offset) < 0.05) {
+        // Almost raceline - give huge bonus
+        cost = 0.0; // Start with zero cost for raceline
+    } else {
+        // Lateral deviation cost - use exponential penalty for non-raceline paths
+        double lateral_cost = std::pow(path.lateral_offset, 4) * config_.lateral_cost_weight;
+        cost += lateral_cost;
+    }
     
     // Curvature cost
     double curvature_cost = 0.0;
@@ -206,6 +366,17 @@ double PathGenerator::calculate_path_cost(
     }
     curvature_cost *= config_.curvature_cost_weight;
     cost += curvature_cost;
+    
+    // Debug: Log cost breakdown for all paths with enhanced detail
+    static int cost_log_count = 0;
+    if (cost_log_count < 10 && (std::abs(path.lateral_offset) < 0.1 || std::abs(path.lateral_offset) > 0.3)) {
+        double lateral_cost = (std::abs(path.lateral_offset) < 0.05) ? 0.0 : std::pow(path.lateral_offset, 4) * config_.lateral_cost_weight;
+        RCLCPP_INFO(rclcpp::get_logger("path_generator"), 
+            "[COST DEBUG] lateral_offset=%.3f: lateral_cost=%.1f (%.3f^4 * %.1f), curvature_cost=%.1f, total=%.1f %s", 
+            path.lateral_offset, lateral_cost, path.lateral_offset, config_.lateral_cost_weight, curvature_cost, cost,
+            (std::abs(path.lateral_offset) < 0.05) ? "*** RACELINE ***" : "");
+        cost_log_count++;
+    }
     
     // Obstacle cost - only if obstacles exist
     double obstacle_cost = 0.0;

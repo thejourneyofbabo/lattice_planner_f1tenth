@@ -90,8 +90,12 @@ RefPoint FrenetCoordinate::get_reference_point(double s) const {
         return RefPoint();
     }
     
-    // Clamp s to valid range
-    s = std::max(0.0, std::min(s, total_length_));
+    // Handle wraparound for closed loop raceline
+    if (s > total_length_) {
+        s = std::fmod(s, total_length_);
+    } else if (s < 0.0) {
+        s = total_length_ + std::fmod(s, total_length_);
+    }
     
     return interpolate_reference_point(s);
 }
@@ -145,6 +149,28 @@ RefPoint FrenetCoordinate::interpolate_reference_point(double s) const {
     }
     
     if (i >= reference_path_.size() - 1) {
+        // Handle wraparound at the end of the path
+        const RefPoint& p1 = reference_path_.back();
+        const RefPoint& p2 = reference_path_.front(); // Wrap to beginning
+        
+        double remaining_s = s - p1.s;
+        double segment_length = total_length_ - p1.s; // Distance to end
+        
+        if (segment_length > 1e-6) {
+            double ratio = remaining_s / segment_length;
+            ratio = std::max(0.0, std::min(1.0, ratio));
+            
+            RefPoint interpolated;
+            interpolated.x = p1.x + ratio * (p2.x - p1.x);
+            interpolated.y = p1.y + ratio * (p2.y - p1.y);
+            interpolated.s = s;
+            interpolated.heading = p1.heading + ratio * normalize_angle(p2.heading - p1.heading);
+            interpolated.curvature = p1.curvature + ratio * (p2.curvature - p1.curvature);
+            interpolated.velocity = p1.velocity + ratio * (p2.velocity - p1.velocity);
+            
+            return interpolated;
+        }
+        
         return reference_path_.back();
     }
     

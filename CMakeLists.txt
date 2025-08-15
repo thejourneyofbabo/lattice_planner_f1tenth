@@ -33,6 +33,8 @@ add_executable(lattice_planner_node
   src/core/path_generator.cpp
   src/core/obstacle_detector.cpp
   src/core/spline_utils.cpp
+  src/obstacle_detector.cpp
+  src/path_selector.cpp
 )
 
 ament_target_dependencies(lattice_planner_node

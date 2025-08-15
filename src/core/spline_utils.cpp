@@ -4,6 +4,7 @@
 #include <iostream>
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 
 namespace lattice_planner_pkg {
 
@@ -25,15 +26,11 @@ std::vector<RefPoint> SplineUtils::load_reference_path_from_csv(
     }
     
     std::string line;
+    std::vector<std::string> headers;
+    int x_col = -1, y_col = -1, vel_col = -1;
     bool first_line = true;
     
     while (std::getline(file, line)) {
-        // Skip header line
-        if (first_line) {
-            first_line = false;
-            continue;
-        }
-        
         std::stringstream ss(line);
         std::string cell;
         std::vector<std::string> row;
@@ -42,12 +39,63 @@ std::vector<RefPoint> SplineUtils::load_reference_path_from_csv(
             row.push_back(cell);
         }
         
-        if (row.size() >= 3) {  // At least x, y, velocity
+        // Parse header line to find column indices
+        if (first_line) {
+            headers = row;
+            
+            // Find column indices based on header names
+            for (int i = 0; i < headers.size(); ++i) {
+                std::string header = headers[i];
+                
+                // Convert to lowercase for case-insensitive comparison
+                std::transform(header.begin(), header.end(), header.begin(), ::tolower);
+                
+                if (header == "x_m" || header == "x") {
+                    x_col = i;
+                } else if (header == "y_m" || header == "y") {
+                    y_col = i;
+                } else if (header == "vx_mps" || header == "v" || header == "velocity" || 
+                          header == "speed" || header.find("vel") != std::string::npos) {
+                    vel_col = i;
+                }
+            }
+            
+            // Fallback: if specific headers not found, try positional mapping
+            if (x_col == -1 || y_col == -1) {
+                // For Spielberg format: x_m,y_m,width_left_m,width_right_m,vx_mps
+                if (headers.size() >= 5 && headers[0].find("x") != std::string::npos) {
+                    x_col = 0; y_col = 1; vel_col = 4;
+                }
+                // For slam format: s_m,x_m,y_m,vx_mps,width_left_m,width_right_m
+                else if (headers.size() >= 4 && headers[1].find("x") != std::string::npos) {
+                    x_col = 1; y_col = 2; vel_col = 3;
+                }
+            }
+            
+            if (x_col == -1 || y_col == -1) {
+                std::cerr << "Could not find x_m and y_m columns in CSV header" << std::endl;
+                return path;
+            }
+            
+            std::cout << "CSV column mapping - X: " << x_col << " (" << headers[x_col] 
+                      << "), Y: " << y_col << " (" << headers[y_col];
+            if (vel_col >= 0) {
+                std::cout << "), Velocity: " << vel_col << " (" << headers[vel_col] << ")";
+            }
+            std::cout << std::endl;
+            
+            first_line = false;
+            continue;
+        }
+        
+        // Parse data rows
+        if (row.size() > std::max(x_col, y_col)) {
             RefPoint point;
             try {
-                point.x = std::stod(row[0]);
-                point.y = std::stod(row[1]);
-                point.velocity = row.size() > 2 ? std::stod(row[2]) : 5.0;  // Default velocity
+                point.x = std::stod(row[x_col]);
+                point.y = std::stod(row[y_col]);
+                point.velocity = (vel_col >= 0 && vel_col < row.size()) ? 
+                                std::stod(row[vel_col]) : 5.0;  // Default velocity
             } catch (const std::exception& e) {
                 std::cerr << "Error parsing CSV line: " << line << std::endl;
                 continue;

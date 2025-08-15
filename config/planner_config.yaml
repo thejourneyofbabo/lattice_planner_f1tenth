@@ -3,23 +3,28 @@
 lattice_planner:
   ros__parameters:
     # Reference path (relative to package)
-    reference_path_file: "Spielberg_global"  # Will be resolved to package/config/reference_paths/
+    # reference_path_file: "slam_map_global"  # Will be resolved to package/config/reference_paths/
+    # reference_path_file: "Spielberg_global"
+    reference_path_file: "slam_cent"
     path_resolution: 0.1
     
     # Planning parameters
-    lateral_step: 0.5           # Lateral sampling step (m)
-    max_lateral_offset: 2.0     # Maximum lateral offset (m)
-    planning_horizon: 5.0       # Planning time horizon (s)
-    dt: 0.2                     # Time step (s)
-    planning_frequency: 10.0    # Planning frequency (Hz)
+    lateral_step: 0.3           # Lateral sampling step (m) - reduced for more precise lattice
+    max_lateral_offset: 1.5     # Maximum lateral offset (m) - reduced to stay within track
+    planning_horizon: 1.5       # Planning time horizon (s) - further reduced for faster corner response
+    dt: 0.1                     # Time step (s) - reduced for smoother paths and faster updates
+    planning_frequency: 30.0    # Planning frequency (Hz) - further increased for reactive corner handling
     
     # Vehicle parameters
     max_velocity: 10.0          # Maximum velocity (m/s)
     wheelbase: 0.33             # Vehicle wheelbase (m)
     max_curvature: 1.0          # Maximum path curvature (1/m)
     
-    # Cost weights (for future implementation)
+    # Cost weights
     obstacle_cost_weight: 10.0
+    lateral_cost_weight: 800.0  # Maximum lateral cost weight for extreme raceline preference
+    curvature_cost_weight: 0.05  # Reduced to allow faster corner recovery
+    longitudinal_cost_weight: 0.02  # Further reduced for speed prioritization
     
     # Safety parameters
     safety_margin: 0.3          # Safety margin around obstacles (m)
