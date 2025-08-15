@@ -1,4 +1,5 @@
 #include "lattice_planner_pkg/core/path_generator.hpp"
+#include <rclcpp/rclcpp.hpp>
 #include <cmath>
 #include <algorithm>
 
@@ -29,6 +30,25 @@ std::vector<PathCandidate> PathGenerator::generate_paths(
     
     // Convert vehicle position to Frenet coordinates
     FrenetPoint start_frenet = frenet_coord_->cartesian_to_frenet(vehicle_position);
+    
+    // If vehicle is too far from reference path, find closest point and project onto it
+    int closest_ref_idx = frenet_coord_->find_closest_reference_index(vehicle_position);
+    if (closest_ref_idx >= 0) {
+        RefPoint closest_ref = frenet_coord_->get_reference_point(start_frenet.s);
+        double distance_to_ref = std::sqrt(
+            std::pow(vehicle_position.x - closest_ref.x, 2) + 
+            std::pow(vehicle_position.y - closest_ref.y, 2)
+        );
+        
+        // If too far (>5m), project vehicle onto reference path
+        if (distance_to_ref > 5.0) {
+            start_frenet.s = closest_ref.s;
+            start_frenet.d = 0.0;  // Start from reference line
+            RCLCPP_WARN_ONCE(rclcpp::get_logger("path_generator"), 
+                "Vehicle too far from reference path (%.1fm), projecting to reference line", 
+                distance_to_ref);
+        }
+    }
     
     // Generate lateral offset samples
     std::vector<double> lateral_samples = generate_lateral_samples();

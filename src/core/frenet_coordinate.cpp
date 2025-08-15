@@ -41,13 +41,24 @@ FrenetPoint FrenetCoordinate::cartesian_to_frenet(const Point2D& cartesian_point
     double dx = cartesian_point.x - ref_point.x;
     double dy = cartesian_point.y - ref_point.y;
     
+    // Check if point is too far from reference path
+    double distance = std::sqrt(dx*dx + dy*dy);
+    
     // Transform to frenet frame
     double cos_theta = std::cos(ref_point.heading);
     double sin_theta = std::sin(ref_point.heading);
     
     FrenetPoint frenet_point;
     frenet_point.s = ref_point.s;
-    frenet_point.d = -dx * sin_theta + dy * cos_theta;  // Lateral distance (left positive)
+    
+    // If too far from reference path, limit lateral offset
+    if (distance > 10.0) {
+        // Clamp lateral offset to reasonable range
+        double raw_d = -dx * sin_theta + dy * cos_theta;
+        frenet_point.d = std::max(-5.0, std::min(5.0, raw_d));
+    } else {
+        frenet_point.d = -dx * sin_theta + dy * cos_theta;  // Lateral distance (left positive)
+    }
     
     return frenet_point;
 }
